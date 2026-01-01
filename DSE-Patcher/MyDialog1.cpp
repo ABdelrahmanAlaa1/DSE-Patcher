@@ -453,22 +453,36 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			bAllocatedConsole = AllocConsole();
 		}
 		
-		// redirect stdout to console
+		// redirect stdout and stderr to console
+		// Note: We redirect both stdout and stderr because some shells (like PowerShell 7)
+		// handle stderr output better for GUI subsystem applications
 		FILE* fp = NULL;
+		FILE* fpErr = NULL;
 		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
 		{
 			if(bAllocatedConsole || bAttachedToParent) FreeConsole();
 			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
 			return 1;
 		}
+		freopen_s(&fpErr, "CONOUT$", "w", stderr); //lint !e534
 		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
 		FILE* fpIn = NULL;
 		freopen_s(&fpIn, "CONIN$", "r", stdin); //lint !e534
 		
+		// Disable buffering for immediate output visibility
+		setvbuf(stdout, NULL, _IONBF, 0);
+		setvbuf(stderr, NULL, _IONBF, 0);
+		
 		// When attached to parent console, print newline first to start on a new line
 		if(bAttachedToParent)
 		{
-			printf("\n");
+			// Write directly to console handle for better compatibility with PowerShell 7
+			HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+			if(hConsole != INVALID_HANDLE_VALUE)
+			{
+				DWORD written;
+				WriteConsoleA(hConsole, "\r\n", 2, &written, NULL);
+			}
 		}
 
 		int result = 0;
@@ -498,11 +512,16 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			result = 1;
 		}
 
+		// Flush all output before cleanup
+		fflush(stdout);
+		fflush(stderr);
+
 		// Only wait for user input if we allocated a new console (not attached to parent)
 		// When attached to parent console, the output stays visible in the shell
 		if(bAllocatedConsole)
 		{
 			printf("\nPress Enter to exit...\n");
+			fflush(stdout);
 			if(fpIn != NULL)
 			{
 				getchar();
@@ -512,9 +531,12 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		else
 		{
 			// Attached to parent console - print a newline to ensure prompt appears on new line
-			printf("\n");
-			// Flush output to ensure it's visible
-			fflush(stdout);
+			HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+			if(hConsole != INVALID_HANDLE_VALUE)
+			{
+				DWORD written;
+				WriteConsoleA(hConsole, "\r\n", 2, &written, NULL);
+			}
 			// Free the console attachment
 			FreeConsole();
 		}
