@@ -457,14 +457,13 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		FILE* fp = NULL;
 		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
 		{
-			if(bAllocatedConsole) FreeConsole();
+			if(bAllocatedConsole || bAttachedToParent) FreeConsole();
 			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
 			return 1;
 		}
 		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
 		FILE* fpIn = NULL;
-		//lint -e{534} Warning 534: Ignoring return value of function
-		freopen_s(&fpIn, "CONIN$", "r", stdin);
+		freopen_s(&fpIn, "CONIN$", "r", stdin); //lint !e534
 		
 		// When attached to parent console, print newline first to start on a new line
 		if(bAttachedToParent)
@@ -510,9 +509,9 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			}
 			FreeConsole();
 		}
-		else if(bAttachedToParent)
+		else
 		{
-			// Print a newline to ensure prompt appears on new line
+			// Attached to parent console - print a newline to ensure prompt appears on new line
 			printf("\n");
 			// Flush output to ensure it's visible
 			fflush(stdout);
