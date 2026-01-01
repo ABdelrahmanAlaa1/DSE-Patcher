@@ -2186,7 +2186,9 @@ cleanup:
 int MyExecuteCLI(THREAD_TASK_NO ttno)
 {
     int rc = 0;
-    int sel = 0; // default to first vulnerable driver (RTCore64)
+    // default to first vulnerable driver (RTCore64) - index 0
+    const int DEFAULT_DRIVER_INDEX = 0;
+    int sel = DEFAULT_DRIVER_INDEX;
     HANDLE hDevice = NULL;
 
     printf("DSE-Patcher CLI Mode\n");
@@ -2331,7 +2333,6 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
     if(g.vd[sel].pFunctionReadMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,&g.pd.dwDSEActualValue) != 0)
     {
         printf("[!] Error: Can't read %s!\n", g.pd.szVariableName);
-        CloseHandle(hDevice);
         rc = 11;
         goto cleanup;
     }
@@ -2351,7 +2352,7 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
     // perform the requested operation
     if(ttno == ThreadTaskDisableDSE)
     {
-        if(g.pd.dwDSEActualValue == 0)
+        if(g.pd.dwDSEActualValue == g.pd.dwDSEDisableValue)
         {
             printf("[*] DSE is already disabled.\n");
         }
@@ -2362,7 +2363,6 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
             if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEDisableValue) != 0)
             {
                 printf("[!] Error: Can't disable DSE!\n");
-                CloseHandle(hDevice);
                 rc = 12;
                 goto cleanup;
             }
@@ -2372,7 +2372,7 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
     }
     else if(ttno == ThreadTaskEnableDSE)
     {
-        if(g.pd.dwDSEActualValue != 0)
+        if(g.pd.dwDSEActualValue != g.pd.dwDSEDisableValue)
         {
             printf("[*] DSE is already enabled.\n");
         }
@@ -2383,7 +2383,6 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
             if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEEnableValue) != 0)
             {
                 printf("[!] Error: Can't enable DSE!\n");
-                CloseHandle(hDevice);
                 rc = 13;
                 goto cleanup;
             }
@@ -2398,7 +2397,6 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
         if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEOriginalValue) != 0)
         {
             printf("[!] Error: Can't restore DSE!\n");
-            CloseHandle(hDevice);
             rc = 14;
             goto cleanup;
         }
@@ -2423,7 +2421,7 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
             printf("[+] New %s value: 0x%08lX\n", g.pd.szVariableName, g.pd.dwDSEActualValue);
         }
 
-        if(g.pd.dwDSEActualValue == 0)
+        if(g.pd.dwDSEActualValue == g.pd.dwDSEDisableValue)
         {
             printf("[+] DSE Status: DISABLED\n");
         }
@@ -2433,10 +2431,13 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
         }
     }
 
-    // close device handle
-    CloseHandle(hDevice);
-
 cleanup:
+    // close device handle if opened
+    if(hDevice != NULL)
+    {
+        CloseHandle(hDevice);
+    }
+
     printf("[*] Stopping and deleting service...\n");
 
     // stop and delete service

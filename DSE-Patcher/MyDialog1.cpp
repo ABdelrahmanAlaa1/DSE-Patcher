@@ -444,8 +444,16 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		// allocate console for CLI output
 		AllocConsole();
 		// redirect stdout to console
-		FILE* fp;
-		freopen_s(&fp, "CONOUT$", "w", stdout);
+		FILE* fp = NULL;
+		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
+		{
+			FreeConsole();
+			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
+			return 1;
+		}
+		// redirect stdin for getchar
+		FILE* fpIn = NULL;
+		freopen_s(&fpIn, "CONIN$", "r", stdin);
 
 		int result = 0;
 
