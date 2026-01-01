@@ -35,6 +35,9 @@
 #include <commctrl.h>
 // printf, freopen_s
 #include <stdio.h>
+// _open_osfhandle, _fdopen, _O_TEXT
+#include <io.h>
+#include <fcntl.h>
 #include "resource.h"
 #include "MyFunctions.h"
 
@@ -45,6 +48,9 @@ extern GLOBALS g;
 
 // Store the font handle to delete it on exit
 static HFONT g_hFont = NULL;
+
+// Global console output handle for CLI mode (used by MyExecuteCLI)
+HANDLE g_hConsoleOut = NULL;
 
 //------------------------------------------------------------------------------
 // create tooltip window and associate the tooltip with the control
@@ -494,53 +500,69 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		SetConsoleTitleA("DSE-Patcher CLI");
 		if(fpLog) fprintf(fpLog, "Console title set\n");
 		
-		// Get console output handle directly for early output
+		// Get console handles
 		HANDLE hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
 		HANDLE hConsoleIn = GetStdHandle(STD_INPUT_HANDLE);
 		if(fpLog) fprintf(fpLog, "Console handles: out=%p, in=%p\n", (void*)hConsoleOut, (void*)hConsoleIn);
 		
-		// Write startup message directly to console
+		// Write startup message directly to console first
 		if(hConsoleOut != INVALID_HANDLE_VALUE && hConsoleOut != NULL)
 		{
 			DWORD written = 0;
-			const char* msg = "DSE-Patcher CLI Initializing...\r\n";
+			const char* msg = "Initializing...\r\n";
 			WriteConsoleA(hConsoleOut, msg, (DWORD)strlen(msg), &written, NULL);
 			if(fpLog) fprintf(fpLog, "Initial WriteConsole wrote %lu bytes\n", written);
 		}
 		
-		// Now redirect stdio to console - MyExecuteCLI uses printf
-		FILE* fp = NULL;
-		FILE* fpErr = NULL;
-		FILE* fpIn = NULL;
+		// Redirect stdio using older freopen (not freopen_s) which may work better with DDK CRT
+		// Also try opening CONOUT$ directly first
+		if(fpLog) fprintf(fpLog, "Attempting stdio redirection...\n");
 		
-		errno_t errOut = freopen_s(&fp, "CONOUT$", "w", stdout);
-		if(fpLog) fprintf(fpLog, "freopen_s stdout: err=%d, fp=%p\n", errOut, (void*)fp);
+		FILE* fpStdout = NULL;
+		FILE* fpStdin = NULL;
+		BOOL bStdioOK = FALSE;
 		
-		errno_t errErr = freopen_s(&fpErr, "CONOUT$", "w", stderr);
-		if(fpLog) fprintf(fpLog, "freopen_s stderr: err=%d, fp=%p\n", errErr, (void*)fpErr);
+		// Method: Use _fdopen with console file descriptor
+		int hConOut = _open_osfhandle((intptr_t)hConsoleOut, _O_TEXT);
+		int hConIn = _open_osfhandle((intptr_t)hConsoleIn, _O_TEXT);
+		if(fpLog) fprintf(fpLog, "_open_osfhandle results: out=%d, in=%d\n", hConOut, hConIn);
 		
-		errno_t errIn = freopen_s(&fpIn, "CONIN$", "r", stdin);
-		if(fpLog) fprintf(fpLog, "freopen_s stdin: err=%d, fp=%p\n", errIn, (void*)fpIn);
-		
-		// Check if stdout redirection worked
-		if(errOut != 0 || fp == NULL)
+		if(hConOut != -1)
 		{
-			if(fpLog) fprintf(fpLog, "WARNING: stdout redirection failed, using WriteConsole fallback\n");
-			// Don't exit - we'll use WriteConsole as fallback
+			fpStdout = _fdopen(hConOut, "w");
+			if(fpLog) fprintf(fpLog, "_fdopen stdout: %p\n", (void*)fpStdout);
+			
+			if(fpStdout != NULL)
+			{
+				// Replace stdout with our console FILE*
+				*stdout = *fpStdout;
+				setvbuf(stdout, NULL, _IONBF, 0);
+				bStdioOK = TRUE;
+				if(fpLog) fprintf(fpLog, "stdout replaced successfully\n");
+			}
+		}
+		
+		if(hConIn != -1)
+		{
+			fpStdin = _fdopen(hConIn, "r");
+			if(fpLog) fprintf(fpLog, "_fdopen stdin: %p\n", (void*)fpStdin);
+			if(fpStdin != NULL)
+			{
+				*stdin = *fpStdin;
+			}
+		}
+		
+		// Test printf
+		if(bStdioOK)
+		{
+			printf("Console ready.\n");
+			fflush(stdout);
+			if(fpLog) fprintf(fpLog, "printf test done\n");
 		}
 		else
 		{
-			// Disable buffering for stdout
-			setvbuf(stdout, NULL, _IONBF, 0);
-			if(fpLog) fprintf(fpLog, "stdout set to unbuffered\n");
+			if(fpLog) fprintf(fpLog, "stdio redirection failed, will use WriteConsole\n");
 		}
-		
-		if(fpErr != NULL) setvbuf(stderr, NULL, _IONBF, 0);
-		
-		// Test printf
-		printf("Console initialized.\n");
-		fflush(stdout);
-		if(fpLog) fprintf(fpLog, "printf test done\n");
 
 		int result = 0;
 
@@ -579,7 +601,6 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 
 		// Flush output
 		fflush(stdout);
-		fflush(stderr);
 		if(fpLog) fprintf(fpLog, "Output flushed\n");
 
 		// Wait for user input before closing
@@ -588,24 +609,22 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		
 		if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
 		
-		// Try to read from stdin
-		if(fpIn != NULL)
+		// Read from console
+		if(fpStdin != NULL)
 		{
 			if(fpLog) fprintf(fpLog, "Using getchar()\n");
 			getchar();
 		}
 		else if(hConsoleIn != INVALID_HANDLE_VALUE && hConsoleIn != NULL)
 		{
-			// Fallback: read directly from console
 			if(fpLog) fprintf(fpLog, "Using ReadConsoleA()\n");
 			char inputBuf[16];
-			DWORD read = 0;
-			ReadConsoleA(hConsoleIn, inputBuf, 1, &read, NULL);
+			DWORD readCount = 0;
+			ReadConsoleA(hConsoleIn, inputBuf, 1, &readCount, NULL);
 		}
 		else
 		{
-			// Last resort: message box
-			if(fpLog) fprintf(fpLog, "Using MessageBox()\n");
+			if(fpLog) fprintf(fpLog, "Using MessageBox fallback\n");
 			MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
 		}
 		
