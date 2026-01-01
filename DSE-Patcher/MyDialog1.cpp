@@ -419,10 +419,11 @@ void PrintCLIHelp()
 	printf("Options:\n");
 	printf("  -disable   Disable Driver Signature Enforcement\n");
 	printf("  -enable    Enable Driver Signature Enforcement\n");
-	printf("  -restore   Restore DSE to original value\n");
+	printf("  -restore   Restore DSE to the value captured at CLI startup\n");
 	printf("  -help      Show this help message\n\n");
 	printf("If no arguments are provided, the GUI will be launched.\n\n");
 	printf("Note: This tool requires Administrator privileges.\n");
+	printf("      Uses RTCore64 driver for kernel memory access.\n");
 }
 
 
@@ -451,9 +452,12 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
 			return 1;
 		}
-		// redirect stdin for getchar
+		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
 		FILE* fpIn = NULL;
-		freopen_s(&fpIn, "CONIN$", "r", stdin);
+		if(freopen_s(&fpIn, "CONIN$", "r", stdin) != 0 || fpIn == NULL)
+		{
+			printf("Warning: Could not redirect console input.\n");
+		}
 
 		int result = 0;
 

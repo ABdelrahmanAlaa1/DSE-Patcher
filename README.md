@@ -17,10 +17,12 @@ Usage: DSE-Patcher.exe [options]
 Options:
   -disable   Disable Driver Signature Enforcement
   -enable    Enable Driver Signature Enforcement
-  -restore   Restore DSE to original value
+  -restore   Restore DSE to the value captured at CLI startup
   -help      Show help message
 ```
 
 If no arguments are provided, the GUI will be launched.
 
-**Note:** This tool requires Administrator privileges.
+**Notes:**
+- This tool requires Administrator privileges.
+- CLI mode uses the RTCore64 driver for kernel memory access.
