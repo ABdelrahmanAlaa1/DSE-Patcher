@@ -442,48 +442,38 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 	// check for command line arguments
 	if(lpCmdLine != NULL && lpCmdLine[0] != '\0')
 	{
-		// Try to attach to parent process's console first (e.g., cmd.exe or powershell)
-		// If that fails, allocate a new console
-		BOOL bAttachedToParent = AttachConsole(ATTACH_PARENT_PROCESS);
-		BOOL bAllocatedConsole = FALSE;
-		
-		if(!bAttachedToParent)
+		// For GUI subsystem applications, we need to always allocate a new console
+		// Attaching to parent console doesn't work reliably because:
+		// 1. CMD/PowerShell don't wait for GUI apps and return to prompt immediately  
+		// 2. Output gets mixed with shell prompt or lost entirely
+		// 3. The timing of console attachment vs shell prompt is unpredictable
+		BOOL bAllocatedConsole = AllocConsole();
+		if(!bAllocatedConsole)
 		{
-			// No parent console, allocate a new one
-			bAllocatedConsole = AllocConsole();
+			MessageBox(NULL, "Failed to allocate console.", "Error", MB_OK | MB_ICONERROR);
+			return 1;
 		}
 		
+		// Set console title
+		SetConsoleTitleA("DSE-Patcher CLI");
+		
 		// redirect stdout and stderr to console
-		// Note: We redirect both stdout and stderr because some shells (like PowerShell 7)
-		// handle stderr output better for GUI subsystem applications
 		FILE* fp = NULL;
 		FILE* fpErr = NULL;
 		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
 		{
-			if(bAllocatedConsole || bAttachedToParent) FreeConsole();
+			FreeConsole();
 			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
 			return 1;
 		}
 		freopen_s(&fpErr, "CONOUT$", "w", stderr); //lint !e534
-		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
+		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter to close)
 		FILE* fpIn = NULL;
 		freopen_s(&fpIn, "CONIN$", "r", stdin); //lint !e534
 		
 		// Disable buffering for immediate output visibility
 		setvbuf(stdout, NULL, _IONBF, 0);
 		setvbuf(stderr, NULL, _IONBF, 0);
-		
-		// When attached to parent console, print newline first to start on a new line
-		if(bAttachedToParent)
-		{
-			// Write directly to console handle for better compatibility with PowerShell 7
-			HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-			if(hConsole != INVALID_HANDLE_VALUE)
-			{
-				DWORD written;
-				WriteConsoleA(hConsole, "\r\n", 2, &written, NULL);
-			}
-		}
 
 		int result = 0;
 
@@ -512,34 +502,18 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			result = 1;
 		}
 
-		// Flush all output before cleanup
+		// Flush all output before waiting
 		fflush(stdout);
 		fflush(stderr);
 
-		// Only wait for user input if we allocated a new console (not attached to parent)
-		// When attached to parent console, the output stays visible in the shell
-		if(bAllocatedConsole)
+		// Wait for user input before closing console window
+		printf("\nPress Enter to exit...\n");
+		fflush(stdout);
+		if(fpIn != NULL)
 		{
-			printf("\nPress Enter to exit...\n");
-			fflush(stdout);
-			if(fpIn != NULL)
-			{
-				getchar();
-			}
-			FreeConsole();
+			getchar();
 		}
-		else
-		{
-			// Attached to parent console - print a newline to ensure prompt appears on new line
-			HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-			if(hConsole != INVALID_HANDLE_VALUE)
-			{
-				DWORD written;
-				WriteConsoleA(hConsole, "\r\n", 2, &written, NULL);
-			}
-			// Free the console attachment
-			FreeConsole();
-		}
+		FreeConsole();
 
 		return result;
 	}
