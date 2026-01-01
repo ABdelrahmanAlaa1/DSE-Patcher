@@ -442,21 +442,34 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 	// check for command line arguments
 	if(lpCmdLine != NULL && lpCmdLine[0] != '\0')
 	{
-		// allocate console for CLI output
-		AllocConsole();
+		// Try to attach to parent process's console first (e.g., cmd.exe or powershell)
+		// If that fails, allocate a new console
+		BOOL bAttachedToParent = AttachConsole(ATTACH_PARENT_PROCESS);
+		BOOL bAllocatedConsole = FALSE;
+		
+		if(!bAttachedToParent)
+		{
+			// No parent console, allocate a new one
+			bAllocatedConsole = AllocConsole();
+		}
+		
 		// redirect stdout to console
 		FILE* fp = NULL;
 		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
 		{
-			FreeConsole();
+			if(bAllocatedConsole) FreeConsole();
 			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
 			return 1;
 		}
 		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
 		FILE* fpIn = NULL;
-		if(freopen_s(&fpIn, "CONIN$", "r", stdin) != 0 || fpIn == NULL)
+		//lint -e{534} Warning 534: Ignoring return value of function
+		freopen_s(&fpIn, "CONIN$", "r", stdin);
+		
+		// When attached to parent console, print newline first to start on a new line
+		if(bAttachedToParent)
 		{
-			printf("Warning: Could not redirect console input.\n");
+			printf("\n");
 		}
 
 		int result = 0;
@@ -486,12 +499,26 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			result = 1;
 		}
 
-		// wait for user input before closing console
-		printf("\nPress Enter to exit...\n");
-		getchar();
-
-		// free console
-		FreeConsole();
+		// Only wait for user input if we allocated a new console (not attached to parent)
+		// When attached to parent console, the output stays visible in the shell
+		if(bAllocatedConsole)
+		{
+			printf("\nPress Enter to exit...\n");
+			if(fpIn != NULL)
+			{
+				getchar();
+			}
+			FreeConsole();
+		}
+		else if(bAttachedToParent)
+		{
+			// Print a newline to ensure prompt appears on new line
+			printf("\n");
+			// Flush output to ensure it's visible
+			fflush(stdout);
+			// Free the console attachment
+			FreeConsole();
+		}
 
 		return result;
 	}
