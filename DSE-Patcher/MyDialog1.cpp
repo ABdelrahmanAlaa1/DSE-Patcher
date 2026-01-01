@@ -35,6 +35,9 @@
 #include <commctrl.h>
 // printf, freopen_s
 #include <stdio.h>
+// _open_osfhandle, _fdopen, _O_TEXT
+#include <io.h>
+#include <fcntl.h>
 #include "resource.h"
 #include "MyFunctions.h"
 
@@ -45,6 +48,9 @@ extern GLOBALS g;
 
 // Store the font handle to delete it on exit
 static HFONT g_hFont = NULL;
+
+// Global console output handle for CLI mode (used by MyExecuteCLI)
+HANDLE g_hConsoleOut = NULL;
 
 //------------------------------------------------------------------------------
 // create tooltip window and associate the tooltip with the control
@@ -442,12 +448,13 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 	// check for command line arguments
 	if(lpCmdLine != NULL && lpCmdLine[0] != '\0')
 	{
-		// Open log file for debugging CLI issues
+		// Try to open log file for debugging - try multiple locations
 		char szLogPath[MAX_PATH];
 		FILE* fpLog = NULL;
+		
+		// Try 1: Same directory as executable
 		if(GetModuleFileNameA(NULL, szLogPath, MAX_PATH) != 0)
 		{
-			// Replace .exe with .log
 			char* pExt = strrchr(szLogPath, '.');
 			if(pExt != NULL)
 			{
@@ -460,121 +467,214 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			fopen_s(&fpLog, szLogPath, "w");
 		}
 		
-		if(fpLog) fprintf(fpLog, "CLI started with args: %s\n", lpCmdLine);
-		
-		// For GUI subsystem applications, we need to always allocate a new console
-		// Attaching to parent console doesn't work reliably because:
-		// 1. CMD/PowerShell don't wait for GUI apps and return to prompt immediately  
-		// 2. Output gets mixed with shell prompt or lost entirely
-		// 3. The timing of console attachment vs shell prompt is unpredictable
-		BOOL bAllocatedConsole = AllocConsole();
-		if(fpLog) fprintf(fpLog, "AllocConsole result: %d, LastError: %lu\n", bAllocatedConsole, GetLastError());
-		
-		if(!bAllocatedConsole)
+		// Try 2: TEMP directory if first attempt failed
+		if(fpLog == NULL)
 		{
-			if(fpLog) { fprintf(fpLog, "Failed to allocate console\n"); fclose(fpLog); }
-			MessageBox(NULL, "Failed to allocate console.", "Error", MB_OK | MB_ICONERROR);
-			return 1;
+			char szTempPath[MAX_PATH];
+			if(GetTempPathA(MAX_PATH, szTempPath) != 0)
+			{
+				strcat_s(szTempPath, MAX_PATH, "DSE-Patcher.log");
+				fopen_s(&fpLog, szTempPath, "w");
+			}
 		}
 		
-		// Set console title
-		SetConsoleTitleA("DSE-Patcher CLI");
+		// Set unbuffered mode for immediate writes
+		if(fpLog) setvbuf(fpLog, NULL, _IONBF, 0);
 		
-		// Get console output handle directly
+		if(fpLog) fprintf(fpLog, "=== DSE-Patcher CLI Log ===\n");
+		if(fpLog) fprintf(fpLog, "CLI started with args: '%s'\n", lpCmdLine);
+		
+		// Try to attach to parent console first (e.g., cmd.exe or powershell)
+		BOOL bAttachedToParent = AttachConsole(ATTACH_PARENT_PROCESS);
+		BOOL bAllocatedConsole = FALSE;
+		if(fpLog) fprintf(fpLog, "AttachConsole(ATTACH_PARENT_PROCESS) result: %d, LastError: %lu\n", bAttachedToParent, GetLastError());
+		
+		if(!bAttachedToParent)
+		{
+			// No parent console, allocate a new one
+			bAllocatedConsole = AllocConsole();
+			DWORD dwAllocError = GetLastError();
+			if(fpLog) fprintf(fpLog, "AllocConsole result: %d, LastError: %lu\n", bAllocatedConsole, dwAllocError);
+			
+			if(!bAllocatedConsole)
+			{
+				if(fpLog) { fprintf(fpLog, "FATAL: Failed to allocate console\n"); fclose(fpLog); }
+				MessageBox(NULL, "Failed to allocate console.", "Error", MB_OK | MB_ICONERROR);
+				return 1;
+			}
+			
+			// Set console title only for our own console
+			SetConsoleTitleA("DSE-Patcher CLI");
+			if(fpLog) fprintf(fpLog, "Console title set\n");
+		}
+		else
+		{
+			if(fpLog) fprintf(fpLog, "Attached to parent console\n");
+		}
+		
+		// Get console handles
 		HANDLE hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
-		if(fpLog) fprintf(fpLog, "Console handle: %p\n", (void*)hConsoleOut);
+		HANDLE hConsoleIn = GetStdHandle(STD_INPUT_HANDLE);
+		if(fpLog) fprintf(fpLog, "Console handles: out=%p, in=%p\n", (void*)hConsoleOut, (void*)hConsoleIn);
 		
-		// Write directly to console to test
+		// Write startup message directly to console first
 		if(hConsoleOut != INVALID_HANDLE_VALUE && hConsoleOut != NULL)
 		{
 			DWORD written = 0;
-			const char* testMsg = "DSE-Patcher CLI Starting...\r\n";
-			WriteConsoleA(hConsoleOut, testMsg, (DWORD)strlen(testMsg), &written, NULL);
-			if(fpLog) fprintf(fpLog, "WriteConsole wrote %lu bytes\n", written);
+			// Print newline first if attached to parent console (to separate from prompt)
+			if(bAttachedToParent)
+			{
+				WriteConsoleA(hConsoleOut, "\r\n", 2, &written, NULL);
+			}
+			const char* msg = "DSE-Patcher CLI\r\n================\r\n";
+			WriteConsoleA(hConsoleOut, msg, (DWORD)strlen(msg), &written, NULL);
+			if(fpLog) fprintf(fpLog, "Initial WriteConsole wrote %lu bytes\n", written);
 		}
 		
-		// redirect stdout and stderr to console
-		FILE* fp = NULL;
-		FILE* fpErr = NULL;
-		errno_t err = freopen_s(&fp, "CONOUT$", "w", stdout);
-		if(fpLog) fprintf(fpLog, "freopen_s stdout result: %d, fp=%p\n", err, (void*)fp);
+		// Redirect stdio using _fdopen
+		if(fpLog) fprintf(fpLog, "Attempting stdio redirection...\n");
 		
-		if(err != 0 || fp == NULL)
+		FILE* fpStdout = NULL;
+		FILE* fpStdin = NULL;
+		BOOL bStdioOK = FALSE;
+		
+		// Method: Use _fdopen with console file descriptor
+		int hConOut = _open_osfhandle((intptr_t)hConsoleOut, _O_TEXT);
+		int hConIn = _open_osfhandle((intptr_t)hConsoleIn, _O_TEXT);
+		if(fpLog) fprintf(fpLog, "_open_osfhandle results: out=%d, in=%d\n", hConOut, hConIn);
+		
+		if(hConOut != -1)
 		{
-			if(fpLog) { fprintf(fpLog, "Failed to redirect stdout\n"); fclose(fpLog); }
-			FreeConsole();
-			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
-			return 1;
+			fpStdout = _fdopen(hConOut, "w");
+			if(fpLog) fprintf(fpLog, "_fdopen stdout: %p\n", (void*)fpStdout);
+			
+			if(fpStdout != NULL)
+			{
+				// Don't try to replace stdout - it crashes with DDK CRT
+				// Just use fpStdout directly for our output
+				setvbuf(fpStdout, NULL, _IONBF, 0);
+				bStdioOK = TRUE;
+				if(fpLog) fprintf(fpLog, "fpStdout ready (not replacing stdout)\n");
+			}
 		}
-		freopen_s(&fpErr, "CONOUT$", "w", stderr); //lint !e534
-		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter to close)
-		FILE* fpIn = NULL;
-		freopen_s(&fpIn, "CONIN$", "r", stdin); //lint !e534
 		
-		// Disable buffering for immediate output visibility
-		setvbuf(stdout, NULL, _IONBF, 0);
-		setvbuf(stderr, NULL, _IONBF, 0);
+		if(hConIn != -1)
+		{
+			fpStdin = _fdopen(hConIn, "r");
+			if(fpLog) fprintf(fpLog, "_fdopen stdin: %p\n", (void*)fpStdin);
+		}
 		
-		// Test printf after redirection
-		printf("Console initialized successfully.\n");
-		if(fpLog) fprintf(fpLog, "printf test completed\n");
+		// Test output using fpStdout
+		if(bStdioOK && fpStdout != NULL)
+		{
+			fprintf(fpStdout, "Console ready.\n");
+			fflush(fpStdout);
+			if(fpLog) fprintf(fpLog, "fprintf test done\n");
+		}
+		else
+		{
+			if(fpLog) fprintf(fpLog, "stdio redirection failed, will use WriteConsole\n");
+		}
 
 		int result = 0;
+		char msgBuf[1024];
+		DWORD written = 0;
+		
+		// Helper macro for console output
+		#define CLI_PRINT(msg) \
+			do { \
+				if(fpStdout) { fprintf(fpStdout, "%s", msg); fflush(fpStdout); } \
+				else { WriteConsoleA(hConsoleOut, msg, (DWORD)strlen(msg), &written, NULL); } \
+			} while(0)
 
 		// parse command line arguments
 		if(_stricmp(lpCmdLine, "-disable") == 0)
 		{
-			if(fpLog) fprintf(fpLog, "Executing disable command\n");
+			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskDisableDSE)\n");
+			CLI_PRINT("Executing: Disable DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskDisableDSE);
-			if(fpLog) fprintf(fpLog, "Disable command result: %d\n", result);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
+			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-enable") == 0)
 		{
-			if(fpLog) fprintf(fpLog, "Executing enable command\n");
+			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskEnableDSE)\n");
+			CLI_PRINT("Executing: Enable DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskEnableDSE);
-			if(fpLog) fprintf(fpLog, "Enable command result: %d\n", result);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
+			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-restore") == 0)
 		{
-			if(fpLog) fprintf(fpLog, "Executing restore command\n");
+			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskRestoreDSE)\n");
+			CLI_PRINT("Executing: Restore DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskRestoreDSE);
-			if(fpLog) fprintf(fpLog, "Restore command result: %d\n", result);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
+			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-help") == 0 || _stricmp(lpCmdLine, "--help") == 0 || _stricmp(lpCmdLine, "/?") == 0)
 		{
-			if(fpLog) fprintf(fpLog, "Executing help command\n");
-			PrintCLIHelp();
+			if(fpLog) fprintf(fpLog, "Showing help\n");
+			CLI_PRINT("DSE-Patcher CLI Help\r\n");
+			CLI_PRINT("====================\r\n\r\n");
+			CLI_PRINT("Usage: DSE-Patcher.exe [options]\r\n\r\n");
+			CLI_PRINT("Options:\r\n");
+			CLI_PRINT("  -disable   Disable Driver Signature Enforcement\r\n");
+			CLI_PRINT("  -enable    Enable Driver Signature Enforcement\r\n");
+			CLI_PRINT("  -restore   Restore DSE to original value\r\n");
+			CLI_PRINT("  -help      Show this help message\r\n\r\n");
+			CLI_PRINT("Note: Requires Administrator privileges.\r\n");
 			result = 0;
 		}
 		else
 		{
-			if(fpLog) fprintf(fpLog, "Unknown argument: %s\n", lpCmdLine);
-			printf("Error: Unknown argument '%s'\n\n", lpCmdLine);
-			PrintCLIHelp();
+			if(fpLog) fprintf(fpLog, "Unknown argument: '%s'\n", lpCmdLine);
+			sprintf_s(msgBuf, sizeof(msgBuf), "Error: Unknown argument '%s'\r\n\r\nUse -help for usage information.\r\n", lpCmdLine);
+			CLI_PRINT(msgBuf);
 			result = 1;
 		}
 
-		// Flush all output before waiting
-		fflush(stdout);
-		fflush(stderr);
+		if(fpLog) fprintf(fpLog, "Command completed, result=%d\n", result);
 
-		// Wait for user input before closing console window
-		printf("\nPress Enter to exit...\n");
-		fflush(stdout);
-		
-		if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
-		
-		if(fpIn != NULL)
+		// Only wait for Enter if we allocated our own console (not attached to parent)
+		if(bAllocatedConsole)
 		{
-			getchar();
+			CLI_PRINT("\r\nPress Enter to exit...\r\n");
+			
+			if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
+			
+			// Read from console
+			if(fpStdin != NULL)
+			{
+				if(fpLog) fprintf(fpLog, "Using fgetc(fpStdin)\n");
+				fgetc(fpStdin);
+			}
+			else if(hConsoleIn != INVALID_HANDLE_VALUE && hConsoleIn != NULL)
+			{
+				if(fpLog) fprintf(fpLog, "Using ReadConsoleA()\n");
+				char inputBuf[16];
+				DWORD readCount = 0;
+				ReadConsoleA(hConsoleIn, inputBuf, 1, &readCount, NULL);
+			}
+			else
+			{
+				if(fpLog) fprintf(fpLog, "Using MessageBox fallback\n");
+				MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
+			}
 		}
 		else
 		{
-			// If stdin redirection failed, use a message box to wait
-			MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
+			// Attached to parent console - just print a newline and let the shell continue
+			CLI_PRINT("\r\n");
+			if(fpLog) fprintf(fpLog, "Attached to parent, not waiting for input\n");
 		}
 		
-		if(fpLog) { fprintf(fpLog, "CLI completed, closing.\n"); fflush(fpLog); fclose(fpLog); }
+		#undef CLI_PRINT
+		
+		if(fpLog) { fprintf(fpLog, "CLI completed successfully.\n"); fclose(fpLog); }
 		FreeConsole();
 
 		return result;
