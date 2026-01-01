@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build Release x64
+      run: msbuild DSE-Patcher.sln /p:Configuration=Release /p:Platform=x64 /m /verbosity:minimal
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: DSE-Patcher-x64
+        path: x64/Release/*.exe
+        if-no-files-found: error
