@@ -534,11 +534,11 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			
 			if(fpStdout != NULL)
 			{
-				// Replace stdout with our console FILE*
-				*stdout = *fpStdout;
-				setvbuf(stdout, NULL, _IONBF, 0);
+				// Don't try to replace stdout - it crashes with DDK CRT
+				// Just use fpStdout directly for our output
+				setvbuf(fpStdout, NULL, _IONBF, 0);
 				bStdioOK = TRUE;
-				if(fpLog) fprintf(fpLog, "stdout replaced successfully\n");
+				if(fpLog) fprintf(fpLog, "fpStdout ready (not replacing stdout)\n");
 			}
 		}
 		
@@ -546,18 +546,14 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		{
 			fpStdin = _fdopen(hConIn, "r");
 			if(fpLog) fprintf(fpLog, "_fdopen stdin: %p\n", (void*)fpStdin);
-			if(fpStdin != NULL)
-			{
-				*stdin = *fpStdin;
-			}
 		}
 		
-		// Test printf
-		if(bStdioOK)
+		// Test output using fpStdout
+		if(bStdioOK && fpStdout != NULL)
 		{
-			printf("Console ready.\n");
-			fflush(stdout);
-			if(fpLog) fprintf(fpLog, "printf test done\n");
+			fprintf(fpStdout, "Console ready.\n");
+			fflush(fpStdout);
+			if(fpLog) fprintf(fpLog, "fprintf test done\n");
 		}
 		else
 		{
@@ -565,55 +561,78 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		}
 
 		int result = 0;
+		char msgBuf[1024];
+		DWORD written = 0;
+		
+		// Helper macro for console output
+		#define CLI_PRINT(msg) \
+			do { \
+				if(fpStdout) { fprintf(fpStdout, "%s", msg); fflush(fpStdout); } \
+				else { WriteConsoleA(hConsoleOut, msg, (DWORD)strlen(msg), &written, NULL); } \
+			} while(0)
 
 		// parse command line arguments
 		if(_stricmp(lpCmdLine, "-disable") == 0)
 		{
 			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskDisableDSE)\n");
+			CLI_PRINT("Executing: Disable DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskDisableDSE);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
 			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-enable") == 0)
 		{
 			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskEnableDSE)\n");
+			CLI_PRINT("Executing: Enable DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskEnableDSE);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
 			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-restore") == 0)
 		{
 			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskRestoreDSE)\n");
+			CLI_PRINT("Executing: Restore DSE...\r\n\r\n");
 			result = MyExecuteCLI(ThreadTaskRestoreDSE);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
 			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
 		else if(_stricmp(lpCmdLine, "-help") == 0 || _stricmp(lpCmdLine, "--help") == 0 || _stricmp(lpCmdLine, "/?") == 0)
 		{
-			if(fpLog) fprintf(fpLog, "Calling PrintCLIHelp()\n");
-			PrintCLIHelp();
+			if(fpLog) fprintf(fpLog, "Showing help\n");
+			CLI_PRINT("DSE-Patcher CLI Help\r\n");
+			CLI_PRINT("====================\r\n\r\n");
+			CLI_PRINT("Usage: DSE-Patcher.exe [options]\r\n\r\n");
+			CLI_PRINT("Options:\r\n");
+			CLI_PRINT("  -disable   Disable Driver Signature Enforcement\r\n");
+			CLI_PRINT("  -enable    Enable Driver Signature Enforcement\r\n");
+			CLI_PRINT("  -restore   Restore DSE to original value\r\n");
+			CLI_PRINT("  -help      Show this help message\r\n\r\n");
+			CLI_PRINT("Note: Requires Administrator privileges.\r\n");
 			result = 0;
 		}
 		else
 		{
 			if(fpLog) fprintf(fpLog, "Unknown argument: '%s'\n", lpCmdLine);
-			printf("Error: Unknown argument '%s'\n\n", lpCmdLine);
-			PrintCLIHelp();
+			sprintf_s(msgBuf, sizeof(msgBuf), "Error: Unknown argument '%s'\r\n\r\nUse -help for usage information.\r\n", lpCmdLine);
+			CLI_PRINT(msgBuf);
 			result = 1;
 		}
 
-		// Flush output
-		fflush(stdout);
-		if(fpLog) fprintf(fpLog, "Output flushed\n");
+		if(fpLog) fprintf(fpLog, "Command completed, result=%d\n", result);
 
 		// Wait for user input before closing
-		printf("\nPress Enter to exit...\n");
-		fflush(stdout);
+		CLI_PRINT("\r\nPress Enter to exit...\r\n");
 		
 		if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
 		
 		// Read from console
 		if(fpStdin != NULL)
 		{
-			if(fpLog) fprintf(fpLog, "Using getchar()\n");
-			getchar();
+			if(fpLog) fprintf(fpLog, "Using fgetc(fpStdin)\n");
+			fgetc(fpStdin);
 		}
 		else if(hConsoleIn != INVALID_HANDLE_VALUE && hConsoleIn != NULL)
 		{
@@ -627,6 +646,8 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			if(fpLog) fprintf(fpLog, "Using MessageBox fallback\n");
 			MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
 		}
+		
+		#undef CLI_PRINT
 		
 		if(fpLog) { fprintf(fpLog, "CLI completed successfully.\n"); fclose(fpLog); }
 		FreeConsole();
