@@ -196,6 +196,7 @@ typedef struct _GLOBALS
 
 int MyInitVulnerableDrivers(VULNERABLE_DRIVER *vd,DWORD dwElements);
 DWORD WINAPI MyThreadProc1(PVOID pvoid);
+int MyExecuteCLI(THREAD_TASK_NO ttno);
 
 
 

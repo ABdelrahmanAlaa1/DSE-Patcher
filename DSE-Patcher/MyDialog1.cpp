@@ -33,6 +33,8 @@
 #include <windows.h>
 // CreateStatusWindow
 #include <commctrl.h>
+// printf, freopen_s
+#include <stdio.h>
 #include "resource.h"
 #include "MyFunctions.h"
 
@@ -407,18 +409,94 @@ INT_PTR CALLBACK MyDlg1DlgProc(HWND hwnd,UINT uMsg,WPARAM wParam,LPARAM lParam)
 
 
 //------------------------------------------------------------------------------
+// print CLI help message
+//------------------------------------------------------------------------------
+void PrintCLIHelp()
+{
+	printf("DSE-Patcher - Patch Driver Signature Enforcement\n");
+	printf("=================================================\n\n");
+	printf("Usage: DSE-Patcher.exe [options]\n\n");
+	printf("Options:\n");
+	printf("  -disable   Disable Driver Signature Enforcement\n");
+	printf("  -enable    Enable Driver Signature Enforcement\n");
+	printf("  -restore   Restore DSE to the value captured at CLI startup\n");
+	printf("  -help      Show this help message\n\n");
+	printf("If no arguments are provided, the GUI will be launched.\n\n");
+	printf("Note: This tool requires Administrator privileges.\n");
+	printf("      Uses RTCore64 driver for kernel memory access.\n");
+}
+
+
+//------------------------------------------------------------------------------
 // WinMain
 //------------------------------------------------------------------------------
 int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLine,int nCmdShow)
 {
 	UNREFERENCED_PARAMETER(hPrevInstance);
-	UNREFERENCED_PARAMETER(lpCmdLine);
 	UNREFERENCED_PARAMETER(nCmdShow);
 
 	// zero all global vars
 	memset(&g,0,sizeof(GLOBALS));
 	g.hInstance = hInstance;
 
+	// check for command line arguments
+	if(lpCmdLine != NULL && lpCmdLine[0] != '\0')
+	{
+		// allocate console for CLI output
+		AllocConsole();
+		// redirect stdout to console
+		FILE* fp = NULL;
+		if(freopen_s(&fp, "CONOUT$", "w", stdout) != 0 || fp == NULL)
+		{
+			FreeConsole();
+			MessageBox(NULL, "Failed to redirect console output.", "Error", MB_OK | MB_ICONERROR);
+			return 1;
+		}
+		// redirect stdin for getchar (failure is not critical, user just won't be able to press Enter)
+		FILE* fpIn = NULL;
+		if(freopen_s(&fpIn, "CONIN$", "r", stdin) != 0 || fpIn == NULL)
+		{
+			printf("Warning: Could not redirect console input.\n");
+		}
+
+		int result = 0;
+
+		// parse command line arguments
+		if(_stricmp(lpCmdLine, "-disable") == 0)
+		{
+			result = MyExecuteCLI(ThreadTaskDisableDSE);
+		}
+		else if(_stricmp(lpCmdLine, "-enable") == 0)
+		{
+			result = MyExecuteCLI(ThreadTaskEnableDSE);
+		}
+		else if(_stricmp(lpCmdLine, "-restore") == 0)
+		{
+			result = MyExecuteCLI(ThreadTaskRestoreDSE);
+		}
+		else if(_stricmp(lpCmdLine, "-help") == 0 || _stricmp(lpCmdLine, "--help") == 0 || _stricmp(lpCmdLine, "/?") == 0)
+		{
+			PrintCLIHelp();
+			result = 0;
+		}
+		else
+		{
+			printf("Error: Unknown argument '%s'\n\n", lpCmdLine);
+			PrintCLIHelp();
+			result = 1;
+		}
+
+		// wait for user input before closing console
+		printf("\nPress Enter to exit...\n");
+		getchar();
+
+		// free console
+		FreeConsole();
+
+		return result;
+	}
+
+	// no command line arguments, launch GUI
 	// create dialog box from resource
 	DialogBoxParam(hInstance,MAKEINTRESOURCE(IDD_DIALOG1),0,MyDlg1DlgProc,0);
 
