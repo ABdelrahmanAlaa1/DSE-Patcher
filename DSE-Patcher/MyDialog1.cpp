@@ -484,21 +484,33 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		if(fpLog) fprintf(fpLog, "=== DSE-Patcher CLI Log ===\n");
 		if(fpLog) fprintf(fpLog, "CLI started with args: '%s'\n", lpCmdLine);
 		
-		// Allocate console window
-		BOOL bAllocatedConsole = AllocConsole();
-		DWORD dwAllocError = GetLastError();
-		if(fpLog) fprintf(fpLog, "AllocConsole result: %d, LastError: %lu\n", bAllocatedConsole, dwAllocError);
+		// Try to attach to parent console first (e.g., cmd.exe or powershell)
+		BOOL bAttachedToParent = AttachConsole(ATTACH_PARENT_PROCESS);
+		BOOL bAllocatedConsole = FALSE;
+		if(fpLog) fprintf(fpLog, "AttachConsole(ATTACH_PARENT_PROCESS) result: %d, LastError: %lu\n", bAttachedToParent, GetLastError());
 		
-		if(!bAllocatedConsole)
+		if(!bAttachedToParent)
 		{
-			if(fpLog) { fprintf(fpLog, "FATAL: Failed to allocate console\n"); fclose(fpLog); }
-			MessageBox(NULL, "Failed to allocate console.", "Error", MB_OK | MB_ICONERROR);
-			return 1;
+			// No parent console, allocate a new one
+			bAllocatedConsole = AllocConsole();
+			DWORD dwAllocError = GetLastError();
+			if(fpLog) fprintf(fpLog, "AllocConsole result: %d, LastError: %lu\n", bAllocatedConsole, dwAllocError);
+			
+			if(!bAllocatedConsole)
+			{
+				if(fpLog) { fprintf(fpLog, "FATAL: Failed to allocate console\n"); fclose(fpLog); }
+				MessageBox(NULL, "Failed to allocate console.", "Error", MB_OK | MB_ICONERROR);
+				return 1;
+			}
+			
+			// Set console title only for our own console
+			SetConsoleTitleA("DSE-Patcher CLI");
+			if(fpLog) fprintf(fpLog, "Console title set\n");
 		}
-		
-		// Set console title
-		SetConsoleTitleA("DSE-Patcher CLI");
-		if(fpLog) fprintf(fpLog, "Console title set\n");
+		else
+		{
+			if(fpLog) fprintf(fpLog, "Attached to parent console\n");
+		}
 		
 		// Get console handles
 		HANDLE hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -509,13 +521,17 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 		if(hConsoleOut != INVALID_HANDLE_VALUE && hConsoleOut != NULL)
 		{
 			DWORD written = 0;
-			const char* msg = "Initializing...\r\n";
+			// Print newline first if attached to parent console (to separate from prompt)
+			if(bAttachedToParent)
+			{
+				WriteConsoleA(hConsoleOut, "\r\n", 2, &written, NULL);
+			}
+			const char* msg = "DSE-Patcher CLI\r\n================\r\n";
 			WriteConsoleA(hConsoleOut, msg, (DWORD)strlen(msg), &written, NULL);
 			if(fpLog) fprintf(fpLog, "Initial WriteConsole wrote %lu bytes\n", written);
 		}
 		
-		// Redirect stdio using older freopen (not freopen_s) which may work better with DDK CRT
-		// Also try opening CONOUT$ directly first
+		// Redirect stdio using _fdopen
 		if(fpLog) fprintf(fpLog, "Attempting stdio redirection...\n");
 		
 		FILE* fpStdout = NULL;
@@ -623,28 +639,37 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 
 		if(fpLog) fprintf(fpLog, "Command completed, result=%d\n", result);
 
-		// Wait for user input before closing
-		CLI_PRINT("\r\nPress Enter to exit...\r\n");
-		
-		if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
-		
-		// Read from console
-		if(fpStdin != NULL)
+		// Only wait for Enter if we allocated our own console (not attached to parent)
+		if(bAllocatedConsole)
 		{
-			if(fpLog) fprintf(fpLog, "Using fgetc(fpStdin)\n");
-			fgetc(fpStdin);
-		}
-		else if(hConsoleIn != INVALID_HANDLE_VALUE && hConsoleIn != NULL)
-		{
-			if(fpLog) fprintf(fpLog, "Using ReadConsoleA()\n");
-			char inputBuf[16];
-			DWORD readCount = 0;
-			ReadConsoleA(hConsoleIn, inputBuf, 1, &readCount, NULL);
+			CLI_PRINT("\r\nPress Enter to exit...\r\n");
+			
+			if(fpLog) fprintf(fpLog, "Waiting for Enter key...\n");
+			
+			// Read from console
+			if(fpStdin != NULL)
+			{
+				if(fpLog) fprintf(fpLog, "Using fgetc(fpStdin)\n");
+				fgetc(fpStdin);
+			}
+			else if(hConsoleIn != INVALID_HANDLE_VALUE && hConsoleIn != NULL)
+			{
+				if(fpLog) fprintf(fpLog, "Using ReadConsoleA()\n");
+				char inputBuf[16];
+				DWORD readCount = 0;
+				ReadConsoleA(hConsoleIn, inputBuf, 1, &readCount, NULL);
+			}
+			else
+			{
+				if(fpLog) fprintf(fpLog, "Using MessageBox fallback\n");
+				MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
+			}
 		}
 		else
 		{
-			if(fpLog) fprintf(fpLog, "Using MessageBox fallback\n");
-			MessageBox(NULL, "CLI completed. Click OK to close.", "DSE-Patcher", MB_OK);
+			// Attached to parent console - just print a newline and let the shell continue
+			CLI_PRINT("\r\n");
+			if(fpLog) fprintf(fpLog, "Attached to parent, not waiting for input\n");
 		}
 		
 		#undef CLI_PRINT
