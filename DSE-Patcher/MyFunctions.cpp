@@ -2195,7 +2195,7 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
 {
     int rc = 0;
     // default to first vulnerable driver (RTCore64) - index 0
-    const int DEFAULT_DRIVER_INDEX = 0;
+    const int DEFAULT_DRIVER_INDEX = 4;
     int sel = DEFAULT_DRIVER_INDEX;
     HANDLE hDevice = NULL;
 
