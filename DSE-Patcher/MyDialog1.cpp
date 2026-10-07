@@ -426,6 +426,7 @@ void PrintCLIHelp()
 	printf("  -disable   Disable Driver Signature Enforcement\n");
 	printf("  -enable    Enable Driver Signature Enforcement\n");
 	printf("  -restore   Restore DSE to the value captured at CLI startup\n");
+	printf("  -auto      Temporarily disable DSE, then restore the original value\n");
 	printf("  -help      Show this help message\n\n");
 	printf("If no arguments are provided, the GUI will be launched.\n\n");
 	printf("Note: This tool requires Administrator privileges.\n");
@@ -615,6 +616,15 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			CLI_PRINT(msgBuf);
 			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
 		}
+		else if(_stricmp(lpCmdLine, "-auto") == 0)
+		{
+			if(fpLog) fprintf(fpLog, "Calling MyExecuteCLI(ThreadTaskAutoDSE)\n");
+			CLI_PRINT("Executing: Auto DSE cycle...\r\n\r\n");
+			result = MyExecuteCLI(ThreadTaskAutoDSE);
+			sprintf_s(msgBuf, sizeof(msgBuf), "\r\nResult: %s (code %d)\r\n", result == 0 ? "SUCCESS" : "FAILED", result);
+			CLI_PRINT(msgBuf);
+			if(fpLog) fprintf(fpLog, "MyExecuteCLI returned: %d\n", result);
+		}
 		else if(_stricmp(lpCmdLine, "-help") == 0 || _stricmp(lpCmdLine, "--help") == 0 || _stricmp(lpCmdLine, "/?") == 0)
 		{
 			if(fpLog) fprintf(fpLog, "Showing help\n");
@@ -625,6 +635,7 @@ int __stdcall WinMain(HINSTANCE hInstance,HINSTANCE hPrevInstance,LPSTR lpCmdLin
 			CLI_PRINT("  -disable   Disable Driver Signature Enforcement\r\n");
 			CLI_PRINT("  -enable    Enable Driver Signature Enforcement\r\n");
 			CLI_PRINT("  -restore   Restore DSE to original value\r\n");
+			CLI_PRINT("  -auto      Temporarily disable DSE, then restore the original value\r\n");
 			CLI_PRINT("  -help      Show this help message\r\n\r\n");
 			CLI_PRINT("Note: Requires Administrator privileges.\r\n");
 			result = 0;

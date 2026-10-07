@@ -154,8 +154,9 @@ typedef enum
 	ThreadTaskReadDSEOnFirstRun = 1,
 	ThreadTaskDisableDSE = 2,
 	ThreadTaskEnableDSE = 3,
-	ThreadTaskRestoreDSE = 4
-}THREAD_TASK_NO;
+	ThreadTaskRestoreDSE = 4,
+	ThreadTaskAutoDSE = 5
+} THREAD_TASK_NO;
 
 // thread parameter structure
 typedef struct _THREAD_PARAMS
@@ -197,6 +198,5 @@ typedef struct _GLOBALS
 int MyInitVulnerableDrivers(VULNERABLE_DRIVER *vd,DWORD dwElements);
 DWORD WINAPI MyThreadProc1(PVOID pvoid);
 int MyExecuteCLI(THREAD_TASK_NO ttno);
-
 
 
