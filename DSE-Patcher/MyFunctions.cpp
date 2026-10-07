@@ -2247,6 +2247,59 @@ static int MyLoadDSEOriginalValue(DWORD* pdwValue)
 //------------------------------------------------------------------------------
 // CLI execution with auto-mode seconds parameter
 //------------------------------------------------------------------------------
+// GSOD safety: validate that a g_CiOptions value looks sane
+// Valid values have only known bits set: 0x1|0x2|0x4|0x8|0x2000|0x4000|0x8000 etc.
+// Invalid/corrupted values (like uninitialized memory) would have random high bits
+static BOOL MyValidateCiOptionsValue(DWORD dwValue)
+{
+    // 0 is valid (DSE disabled)
+    if(dwValue == 0) return TRUE;
+    // Known valid bit flags in g_CiOptions (Windows 8+)
+    // Bit 0 (0x1): CODEINTEGRITY_OPTION_ENABLED
+    // Bit 1 (0x2): CODEINTEGRITY_OPTION_TESTSIGN
+    // Bit 2 (0x4): CODEINTEGRITY_OPTION_UMCI_ENABLED
+    // Bit 3 (0x8): CODEINTEGRITY_OPTION_UMCI_AUDITMODE
+    // Bit 4 (0x10): CODEINTEGRITY_OPTION_UMCI_EXCLUSIONPATHS
+    // Bit 5 (0x20): CODEINTEGRITY_OPTION_TEST_BUILD
+    // Bit 13 (0x2000): CODEINTEGRITY_OPTION_FLIGHTSIGNING
+    // Bit 14 (0x4000): CODEINTEGRITY_OPTION_FLIGHTBUILD
+    // Bit 15 (0x8000): CODEINTEGRITY_OPTION_HVCI_KMCI
+    const DWORD KNOWN_BITS = 0xFF3F; // all known flags
+    if((dwValue & ~KNOWN_BITS) != 0)
+    {
+        // Unknown bits set - suspicious but not necessarily invalid
+        // Only reject if obviously garbage (high 16 bits set)
+        if((dwValue & 0xFFFF0000) != 0) return FALSE;
+    }
+    return TRUE;
+}
+
+// Double-read: read twice with a small delay to detect transient/race corruption
+static BOOL MyDoubleReadVerify(HANDLE hDevice, int sel, DWORD* pdwValue)
+{
+    DWORD val1 = 0xFFFFFFFF, val2 = 0xFFFFFFFE;
+    if(g.vd[sel].pFunctionReadMemory(hDevice, g.pd.ui64PatchAddress, g.pd.dwPatchSize, &val1) != 0)
+        return FALSE;
+    Sleep(1); // tiny delay to detect races
+    if(g.vd[sel].pFunctionReadMemory(hDevice, g.pd.ui64PatchAddress, g.pd.dwPatchSize, &val2) != 0)
+        return FALSE;
+    if(val1 != val2)
+    {
+        printf("[!] WARNING: Double-read mismatch (0x%08lX vs 0x%08lX) - possible race!\n", val1, val2);
+        // Try a third time
+        Sleep(10);
+        if(g.vd[sel].pFunctionReadMemory(hDevice, g.pd.ui64PatchAddress, g.pd.dwPatchSize, &val2) != 0)
+            return FALSE;
+        if(val1 != val2)
+        {
+            printf("[!] CRITICAL: Persistent read inconsistency! Aborting to prevent GSOD.\n");
+            return FALSE;
+        }
+    }
+    *pdwValue = val1;
+    return TRUE;
+}
+
 int MyExecuteCLIEx(THREAD_TASK_NO ttno, DWORD dwAutoSeconds)
 {
     int rc = 0;
@@ -2393,13 +2446,36 @@ int MyExecuteCLIEx(THREAD_TASK_NO ttno, DWORD dwAutoSeconds)
         goto cleanup;
     }
 
-    printf("[*] Reading current %s value...\n", g.pd.szVariableName);
+    printf("[*] Reading current %s value (double-read verify)...\n", g.pd.szVariableName);
 
-    // read DSE value
+    // GSOD safety: double-read to detect transient corruption or race conditions
     g.pd.dwDSEActualValue = 0xFFFFFFFF;
-    if(g.vd[sel].pFunctionReadMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,&g.pd.dwDSEActualValue) != 0)
+    if(g.pd.dwPatchSize == 4)
     {
-        printf("[!] Error: Can't read %s!\n", g.pd.szVariableName);
+        // Use double-read for 4-byte g_CiOptions (Win8+)
+        if(!MyDoubleReadVerify(hDevice, sel, &g.pd.dwDSEActualValue))
+        {
+            printf("[!] Error: Can't reliably read %s! Aborting to prevent GSOD.\n", g.pd.szVariableName);
+            rc = 11;
+            goto cleanup;
+        }
+    }
+    else
+    {
+        // 1-byte g_CiEnabled (Vista/7) - simple read
+        if(g.vd[sel].pFunctionReadMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,&g.pd.dwDSEActualValue) != 0)
+        {
+            printf("[!] Error: Can't read %s!\n", g.pd.szVariableName);
+            rc = 11;
+            goto cleanup;
+        }
+    }
+
+    // GSOD safety: validate the read value looks like a real g_CiOptions
+    if(g.pd.dwPatchSize == 4 && !MyValidateCiOptionsValue(g.pd.dwDSEActualValue))
+    {
+        printf("[!] CRITICAL: Read value 0x%08lX looks invalid/corrupted!\n", g.pd.dwDSEActualValue);
+        printf("[!] Patch address 0x%016I64X may be wrong. Aborting to prevent GSOD.\n", g.pd.ui64PatchAddress);
         rc = 11;
         goto cleanup;
     }
@@ -2412,6 +2488,12 @@ int MyExecuteCLIEx(THREAD_TASK_NO ttno, DWORD dwAutoSeconds)
     {
         bHasSavedOriginal = TRUE;
         printf("[+] Saved original value from file: 0x%08lX\n", dwSavedOriginal);
+        // Validate saved value too
+        if(g.pd.dwPatchSize == 4 && !MyValidateCiOptionsValue(dwSavedOriginal))
+        {
+            printf("[!] WARNING: Saved value looks invalid, ignoring it.\n");
+            bHasSavedOriginal = FALSE;
+        }
     }
 
     if(g.pd.dwPatchSize == 1)
