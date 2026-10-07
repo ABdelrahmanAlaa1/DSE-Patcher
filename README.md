@@ -18,6 +18,7 @@ Options:
   -disable   Disable Driver Signature Enforcement
   -enable    Enable Driver Signature Enforcement
   -restore   Restore DSE to the value captured at CLI startup
+  -auto      Temporarily disable DSE, then restore the original value
   -help      Show help message
 ```
 
