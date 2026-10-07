@@ -727,6 +727,14 @@ int MyGetg_CiOptionsKernelAddress(UINT64 ui64ImageBase,UINT64 *ui64Kernelg_CiOpt
             // leave the for loop
             break;
         }
+        else if(hs.len == 7 && CipInitialize[i] == 0x44 && CipInitialize[i + 1] == 0x89 && (CipInitialize[i + 2] & 0xC7) == 0x05)
+        {
+            g_CiOptionsOffset = *(LONG*)((BYTE*)CipInitialize + i + 3);
+            // calculate virtual address of g_CiOptions (instruction is 7 bytes: 1 REX + 1 opcode + 1 ModR/M + 4 displacement)
+            g_CiOptions = (CipInitialize + i + 7 + g_CiOptionsOffset);
+            // leave the for loop
+            break;
+        }
     }
 
     // check if we have found the offset and virtual address of g_CiOptions
